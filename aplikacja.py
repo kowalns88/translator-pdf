@@ -2,9 +2,6 @@
 """
 ╔══════════════════════════════════════════════════════════════╗
 ║       TŁUMACZ PDF – interfejs graficzny (przeglądarka)       ║
-║                                                              ║
-║  Uruchom:  python aplikacja.py                               ║
-║  Otworzy się przeglądarka z prostym interfejsem.             ║
 ╚══════════════════════════════════════════════════════════════╝
 """
 
@@ -15,6 +12,7 @@ import json
 import glob
 import threading
 import logging
+from collections import deque
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -24,597 +22,511 @@ except ImportError:
     import pymupdf as fitz
 
 from flask import Flask, render_template_string, jsonify, request, send_file
-from src.extractor import extract_page_elements, extract_translatable_texts
+from src.nowy_sklad import wyciagnij_strukture_strony, wyciagnij_obrazki, zbuduj_pdf
 from src.translator import PDFTranslator
-from src.reconstructor import reconstruct_page
-
-# Konfiguracja logowania
-logging.basicConfig(level=logging.WARNING)
 
 app = Flask(__name__)
 
 # === STAN APLIKACJI ===
 stan = {
-    "tłumaczenie_aktywne": False,
+    "aktywne": False,
     "postep": 0,
     "total_stron": 0,
     "aktualna_partia": 0,
     "total_partii": 0,
     "aktualna_strona": 0,
-    "status": "gotowy",  # gotowy, tłumaczę, zakończone, błąd
+    "status": "gotowy",
     "komunikat": "",
     "czas_start": 0,
 }
 
-# === KONFIGURACJA ===
+# Logi – ostatnie 200 wpisów
+logi = deque(maxlen=200)
+
 FOLDER_CZESCI = "czesci"
+FOLDER_OBRAZKI = "obrazki"
 ROZMIAR_PARTII = 10
 PLIK_KONCOWY = "Wyklady_Feynmana_z_Fizyki_Tom_1_PL.pdf"
 
 
+def dodaj_log(msg: str, poziom: str = "info"):
+    """Dodaje wpis do logów widocznych w interfejsie."""
+    timestamp = time.strftime("%H:%M:%S")
+    logi.append({"czas": timestamp, "msg": msg, "poziom": poziom})
+
+
 def znajdz_pdf():
-    """Znajdź plik PDF w bieżącym katalogu."""
     pliki = glob.glob("*.pdf")
-    # Wyklucz pliki wynikowe
-    pliki = [p for p in pliki if "_PL" not in p and "Wyklady" not in p]
-    return pliki
+    return [p for p in pliki if "_PL" not in p and "Wyklady" not in p and "czesc" not in p]
 
 
 def policz_przetlumaczone():
-    """Policz ile partii jest już przetłumaczonych."""
     if not os.path.exists(FOLDER_CZESCI):
         return []
-    pliki = sorted(glob.glob(os.path.join(FOLDER_CZESCI, "czesc_*.pdf")))
-    return pliki
+    return sorted(glob.glob(os.path.join(FOLDER_CZESCI, "czesc_*.pdf")))
 
 
-def tlumacz_w_tle(plik_wejsciowy, od_strony, silnik="google", gemini_key=""):
-    """Funkcja tłumaczenia uruchamiana w osobnym wątku."""
+def tlumacz_w_tle(plik_wejsciowy, od_strony, do_strony, silnik, gemini_key):
+    """Tłumaczenie w osobnym wątku."""
     global stan
 
     try:
-        stan["tłumaczenie_aktywne"] = True
+        stan["aktywne"] = True
         stan["status"] = "tłumaczę"
         stan["czas_start"] = time.time()
 
         os.makedirs(FOLDER_CZESCI, exist_ok=True)
+        os.makedirs(FOLDER_OBRAZKI, exist_ok=True)
 
         doc = fitz.open(plik_wejsciowy)
         total_pages = len(doc)
-        stan["total_stron"] = total_pages
 
-        translator = PDFTranslator(
-            source_lang="en",
-            target_lang="pl",
-            engine=silnik,
-            gemini_api_key=gemini_key if silnik == "gemini" else None,
-        )
+        # Walidacja zakresu
+        od_idx = max(0, od_strony - 1)
+        do_idx = min(total_pages, do_strony)
+        stron_do_tlumaczenia = do_idx - od_idx
 
-        start_idx = od_strony - 1
-        total_partii = (total_pages - start_idx + ROZMIAR_PARTII - 1) // ROZMIAR_PARTII
-        stan["total_partii"] = total_partii
+        stan["total_stron"] = stron_do_tlumaczenia
+        stan["total_partii"] = (stron_do_tlumaczenia + ROZMIAR_PARTII - 1) // ROZMIAR_PARTII
 
-        partia_nr = (start_idx // ROZMIAR_PARTII) + 1
+        dodaj_log(f"Start: strony {od_strony}–{do_strony} ({stron_do_tlumaczenia} stron)")
+        dodaj_log(f"Silnik: {'Google Gemini' if silnik == 'gemini' else 'Google Translate'}")
 
-        for batch_start in range(start_idx, total_pages, ROZMIAR_PARTII):
-            if not stan["tłumaczenie_aktywne"]:
+        # Inicjalizuj tłumacza
+        try:
+            translator = PDFTranslator(
+                source_lang="en", target_lang="pl",
+                engine=silnik,
+                gemini_api_key=gemini_key if silnik == "gemini" else None,
+            )
+            dodaj_log("Tłumacz zainicjalizowany ✓")
+        except Exception as e:
+            dodaj_log(f"BŁĄD inicjalizacji tłumacza: {e}", "error")
+            stan["status"] = "błąd"
+            stan["komunikat"] = str(e)
+            stan["aktywne"] = False
+            doc.close()
+            return
+
+        partia_nr = ((od_idx) // ROZMIAR_PARTII) + 1
+        strony_przetlumaczone = 0
+
+        for batch_start in range(od_idx, do_idx, ROZMIAR_PARTII):
+            if not stan["aktywne"]:
+                dodaj_log("Zatrzymano przez użytkownika", "warn")
                 stan["status"] = "zatrzymany"
-                stan["komunikat"] = f"Zatrzymano na stronie {batch_start + 1}"
                 break
 
-            batch_end = min(batch_start + ROZMIAR_PARTII, total_pages)
+            batch_end = min(batch_start + ROZMIAR_PARTII, do_idx)
             nazwa_pliku = os.path.join(
                 FOLDER_CZESCI,
                 f"czesc_{partia_nr:03d}_strony_{batch_start+1}-{batch_end}.pdf"
             )
 
-            # Pomiń istniejące części
+            # Pomiń istniejące
             if os.path.exists(nazwa_pliku):
-                stan["komunikat"] = f"Partia {partia_nr} już istnieje, pomijam..."
+                dodaj_log(f"Partia {partia_nr} (str. {batch_start+1}–{batch_end}) już istnieje, pomijam")
                 partia_nr += 1
+                strony_przetlumaczone += (batch_end - batch_start)
+                stan["postep"] = int(strony_przetlumaczone / stron_do_tlumaczenia * 100)
                 continue
 
             stan["aktualna_partia"] = partia_nr
-            stan["komunikat"] = f"Tłumaczę strony {batch_start+1}–{batch_end}..."
+            stan["komunikat"] = f"Partia {partia_nr}: strony {batch_start+1}–{batch_end}"
+            dodaj_log(f"── Partia {partia_nr}: strony {batch_start+1}–{batch_end} ──")
 
-            output_doc = fitz.open()
-
+            # 1. Wyciągnij strukturę
+            strony = []
             for page_num in range(batch_start, batch_end):
-                if not stan["tłumaczenie_aktywne"]:
+                if not stan["aktywne"]:
+                    break
+                page = doc[page_num]
+                elementy = wyciagnij_strukture_strony(page)
+                img_paths = wyciagnij_obrazki(doc, page_num, FOLDER_OBRAZKI)
+                for path in img_paths:
+                    elementy.append({"typ": "plik_obrazka", "sciezka": path})
+                strony.append({"numer": page_num + 1, "elementy": elementy})
+
+            if not stan["aktywne"]:
+                break
+
+            # 2. Tłumacz
+            bledy_w_partii = 0
+            for strona in strony:
+                if not stan["aktywne"]:
                     break
 
-                stan["aktualna_strona"] = page_num + 1
-                stan["postep"] = int((page_num - start_idx + 1) / (total_pages - start_idx) * 100)
+                stan["aktualna_strona"] = strona["numer"]
 
-                page = doc[page_num]
-                elements = extract_page_elements(page)
-                translatable_spans = extract_translatable_texts(elements)
+                for elem in strona["elementy"]:
+                    if elem.get("typ") in ("numer_strony", "plik_obrazka", "numer_rozdzialu"):
+                        continue
+                    tekst = elem.get("tekst", "").strip()
+                    if tekst and len(tekst) > 2:
+                        try:
+                            przetlumaczony = translator.translate_text(tekst)
+                            elem["tekst"] = przetlumaczony
+                        except Exception as e:
+                            bledy_w_partii += 1
+                            err_msg = str(e)[:100]
+                            dodaj_log(f"⚠️ Błąd str.{strona['numer']}: {err_msg}", "error")
 
-                if translatable_spans:
-                    translated_spans = translator.translate_spans(translatable_spans)
-                    reconstruct_page(doc, page_num, translated_spans, output_doc)
+                            # Wykryj wyczerpanie tokenów
+                            if "quota" in str(e).lower() or "rate" in str(e).lower() or "429" in str(e):
+                                dodaj_log("🛑 LIMIT TOKENÓW WYCZERPANY! Zatrzymuję.", "error")
+                                dodaj_log(f"Wznów jutro od strony {strona['numer']}: --od {strona['numer']}", "error")
+                                stan["status"] = "błąd"
+                                stan["komunikat"] = f"Limit tokenów! Wznów od strony {strona['numer']}"
+                                stan["aktywne"] = False
+                                doc.close()
+                                return
+
+                strony_przetlumaczone += 1
+                stan["postep"] = int(strony_przetlumaczone / stron_do_tlumaczenia * 100)
+
+                # Log co 5 stron
+                if strona["numer"] % 5 == 0:
+                    dodaj_log(f"  Strona {strona['numer']} OK")
+
+            if not stan["aktywne"]:
+                break
+
+            # 3. Generuj PDF
+            try:
+                zbuduj_pdf(strony, nazwa_pliku, "Wykłady Feynmana z Fizyki")
+                elapsed = time.time() - stan["czas_start"]
+                if bledy_w_partii > 0:
+                    dodaj_log(f"✅ Zapisano {nazwa_pliku} (⚠️ {bledy_w_partii} błędów)", "warn")
                 else:
-                    new_page = output_doc.new_page(-1, width=page.rect.width, height=page.rect.height)
-                    new_page.show_pdf_page(new_page.rect, doc, page_num)
+                    dodaj_log(f"✅ Zapisano {nazwa_pliku}")
+            except Exception as e:
+                dodaj_log(f"❌ Błąd zapisu PDF: {e}", "error")
 
-            if stan["tłumaczenie_aktywne"]:
-                output_doc.save(nazwa_pliku, garbage=4, deflate=True, clean=True)
-
-            output_doc.close()
             partia_nr += 1
 
         doc.close()
 
-        if stan["tłumaczenie_aktywne"]:
+        if stan["aktywne"]:
+            elapsed = time.time() - stan["czas_start"]
             stan["status"] = "zakończone"
             stan["postep"] = 100
-            elapsed = time.time() - stan["czas_start"]
-            stan["komunikat"] = f"Tłumaczenie zakończone! Czas: {elapsed/60:.1f} min"
+            stan["komunikat"] = f"Gotowe! Czas: {elapsed/60:.1f} min"
+            dodaj_log(f"🎉 Tłumaczenie zakończone ({elapsed/60:.1f} min)")
+            dodaj_log(f"Kliknij 'Połącz części' → 'Pobierz'")
 
     except Exception as e:
         stan["status"] = "błąd"
         stan["komunikat"] = f"Błąd: {str(e)}"
+        dodaj_log(f"❌ KRYTYCZNY BŁĄD: {e}", "error")
 
     finally:
-        stan["tłumaczenie_aktywne"] = False
+        stan["aktywne"] = False
 
 
-# === INTERFEJS WWW ===
-
+# === HTML INTERFEJS ===
 STRONA_HTML = """
 <!DOCTYPE html>
 <html lang="pl">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Tłumacz PDF – angielski → polski</title>
+    <title>Tłumacz PDF</title>
     <style>
         * { box-sizing: border-box; margin: 0; padding: 0; }
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            background: #1a1a2e;
-            color: #eee;
-            min-height: 100vh;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            padding: 20px;
-        }
-        .container {
-            background: #16213e;
-            border-radius: 16px;
-            padding: 40px;
-            max-width: 700px;
-            width: 100%;
-            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
-        }
-        h1 {
-            text-align: center;
-            margin-bottom: 10px;
-            font-size: 1.8em;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-        }
-        .subtitle {
-            text-align: center;
-            color: #888;
-            margin-bottom: 30px;
-        }
-        .panel {
-            background: #0f3460;
-            border-radius: 12px;
-            padding: 20px;
-            margin-bottom: 20px;
-        }
-        .panel h3 {
-            margin-bottom: 12px;
-            color: #a8d8ea;
-        }
-        .info-row {
-            display: flex;
-            justify-content: space-between;
-            padding: 8px 0;
-            border-bottom: 1px solid #1a4080;
-        }
-        .info-row:last-child { border-bottom: none; }
-        .info-label { color: #888; }
-        .info-value { color: #fff; font-weight: 500; }
-        .btn {
-            display: inline-block;
-            padding: 14px 28px;
-            border: none;
-            border-radius: 8px;
-            font-size: 1em;
-            font-weight: 600;
-            cursor: pointer;
-            transition: all 0.2s;
-            margin: 5px;
-        }
-        .btn:hover { transform: translateY(-2px); box-shadow: 0 5px 15px rgba(0,0,0,0.3); }
-        .btn:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
-        .btn-primary {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-        }
-        .btn-success {
-            background: linear-gradient(135deg, #11998e 0%, #38ef7d 100%);
-            color: white;
-        }
-        .btn-danger {
-            background: linear-gradient(135deg, #eb3349 0%, #f45c43 100%);
-            color: white;
-        }
-        .btn-warning {
-            background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
-            color: white;
-        }
-        .buttons { text-align: center; margin: 20px 0; }
-        .progress-container {
-            background: #0a1a3a;
-            border-radius: 8px;
-            padding: 3px;
-            margin: 15px 0;
-        }
-        .progress-bar {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            height: 24px;
-            border-radius: 6px;
-            transition: width 0.5s ease;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 0.8em;
-            font-weight: bold;
-            min-width: 40px;
-        }
-        .status-badge {
-            display: inline-block;
-            padding: 4px 12px;
-            border-radius: 20px;
-            font-size: 0.85em;
-            font-weight: 500;
-        }
-        .status-gotowy { background: #1a4080; color: #a8d8ea; }
-        .status-tłumaczę { background: #4a1080; color: #d8a8ea; }
-        .status-zakończone { background: #0a4020; color: #a8ead8; }
-        .status-błąd { background: #401010; color: #eaa8a8; }
-        .status-zatrzymany { background: #403010; color: #ead8a8; }
-        .message {
-            text-align: center;
-            padding: 10px;
-            color: #ccc;
-            font-style: italic;
-        }
-        .input-group {
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            margin: 10px 0;
-        }
-        .input-group label { color: #888; white-space: nowrap; }
-        .input-group input {
-            background: #0a1a3a;
-            border: 1px solid #1a4080;
-            color: #fff;
-            padding: 10px 14px;
-            border-radius: 6px;
-            font-size: 1em;
-            width: 100px;
-        }
-        .parts-list {
-            max-height: 200px;
-            overflow-y: auto;
-            font-size: 0.85em;
-        }
-        .parts-list div {
-            padding: 4px 0;
-            color: #8a8;
-        }
-        select {
-            background: #0a1a3a;
-            border: 1px solid #1a4080;
-            color: #fff;
-            padding: 10px 14px;
-            border-radius: 6px;
-            font-size: 1em;
-            width: 100%;
-        }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #1a1a2e; color: #eee; min-height: 100vh; padding: 20px; }
+        .container { max-width: 800px; margin: 0 auto; }
+        h1 { text-align: center; margin-bottom: 5px; font-size: 1.6em; background: linear-gradient(135deg, #667eea, #764ba2); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+        .subtitle { text-align: center; color: #888; margin-bottom: 20px; }
+        .panel { background: #16213e; border-radius: 12px; padding: 20px; margin-bottom: 15px; }
+        .panel h3 { margin-bottom: 12px; color: #a8d8ea; font-size: 1em; }
+        .row { display: flex; gap: 15px; align-items: center; margin-bottom: 10px; flex-wrap: wrap; }
+        .row label { color: #aaa; min-width: 120px; font-size: 0.9em; }
+        .row input, .row select { background: #0a1a3a; border: 1px solid #1a4080; color: #fff; padding: 8px 12px; border-radius: 6px; font-size: 0.95em; }
+        .row input[type=number] { width: 80px; }
+        .row select { width: 100%; max-width: 350px; }
+        .row input[type=password] { width: 280px; }
+        .btn { display: inline-block; padding: 12px 24px; border: none; border-radius: 8px; font-size: 0.95em; font-weight: 600; cursor: pointer; margin: 4px; transition: all 0.2s; }
+        .btn:hover { transform: translateY(-1px); box-shadow: 0 4px 12px rgba(0,0,0,0.3); }
+        .btn:disabled { opacity: 0.4; cursor: not-allowed; transform: none; }
+        .btn-primary { background: linear-gradient(135deg, #667eea, #764ba2); color: white; }
+        .btn-success { background: linear-gradient(135deg, #11998e, #38ef7d); color: white; }
+        .btn-danger { background: linear-gradient(135deg, #eb3349, #f45c43); color: white; }
+        .buttons { text-align: center; margin: 15px 0; }
+        .progress-container { background: #0a1a3a; border-radius: 8px; padding: 3px; margin: 10px 0; }
+        .progress-bar { background: linear-gradient(135deg, #667eea, #764ba2); height: 22px; border-radius: 6px; transition: width 0.5s; display: flex; align-items: center; justify-content: center; font-size: 0.8em; font-weight: bold; min-width: 30px; }
+        .info-row { display: flex; justify-content: space-between; padding: 5px 0; border-bottom: 1px solid #0f3460; font-size: 0.9em; }
+        .info-row:last-child { border: none; }
+        .info-label { color: #777; }
+        .info-value { color: #ddd; }
+        .log-box { background: #0a0a1a; border: 1px solid #1a3060; border-radius: 8px; padding: 12px; max-height: 300px; overflow-y: auto; font-family: 'Consolas', 'Monaco', monospace; font-size: 0.82em; line-height: 1.6; }
+        .log-line { padding: 1px 0; }
+        .log-time { color: #555; }
+        .log-info { color: #8c8; }
+        .log-warn { color: #ec8; }
+        .log-error { color: #e88; font-weight: bold; }
+        .parts-list { font-size: 0.85em; max-height: 150px; overflow-y: auto; }
+        .parts-list div { padding: 2px 0; color: #8a8; }
+        .hint { font-size: 0.8em; color: #666; margin-top: 5px; }
+        #gemini-extra { display: none; margin-top: 8px; }
     </style>
 </head>
 <body>
-    <div class="container">
-        <h1>📄 Tłumacz PDF</h1>
-        <p class="subtitle">angielski → polski (z zachowaniem układu)</p>
+<div class="container">
+    <h1>📄 Tłumacz PDF</h1>
+    <p class="subtitle">angielski → polski | nowy skład z zachowaniem struktury</p>
 
-        <!-- Informacje o pliku -->
-        <div class="panel">
-            <h3>📁 Plik do tłumaczenia</h3>
-            <div id="file-info">Ładowanie...</div>
+    <div class="panel">
+        <h3>📁 Plik</h3>
+        <div id="file-info">Ładowanie...</div>
+    </div>
+
+    <div class="panel" id="panel-opcje">
+        <h3>⚙️ Opcje tłumaczenia</h3>
+        <div class="row">
+            <label>Od strony:</label>
+            <input type="number" id="od-strony" value="1" min="1">
+            <label>Do strony:</label>
+            <input type="number" id="do-strony" value="968" min="1">
         </div>
-
-        <!-- Opcje startu -->
-        <div class="panel" id="panel-start">
-            <h3>⚙️ Opcje</h3>
-            <div class="input-group">
-                <label for="od-strony">Tłumacz od strony:</label>
-                <input type="number" id="od-strony" value="1" min="1">
-            </div>
-            <div class="input-group">
-                <label for="silnik">Silnik tłumaczenia:</label>
-                <select id="silnik" onchange="pokazKlucz()">
-                    <option value="google">Google Translate (darmowy, średnia jakość)</option>
-                    <option value="gemini">Google Gemini (najlepsza jakość, wymaga klucza API)</option>
-                </select>
-            </div>
-            <div class="input-group" id="klucz-group" style="display:none">
-                <label for="gemini-key">Klucz API Gemini:</label>
-                <input type="password" id="gemini-key" placeholder="wklej klucz z aistudio.google.com" style="width:300px">
-            </div>
-            <div id="gemini-info" style="display:none; margin-top:10px; padding:10px; background:#1a3060; border-radius:8px; font-size:0.85em; color:#aac">
-                💡 Klucz API dostaniesz za darmo na: <a href="https://aistudio.google.com/apikey" target="_blank" style="color:#8af">aistudio.google.com/apikey</a><br>
-                Mając plan Google One AI Pro, masz wyższe limity.
-            </div>
+        <div class="row">
+            <label>Silnik:</label>
+            <select id="silnik" onchange="zmienSilnik()">
+                <option value="google">Google Translate (darmowy, średnia jakość)</option>
+                <option value="gemini">Google Gemini (lepsza jakość, wymaga klucza)</option>
+            </select>
         </div>
-
-        <!-- Przyciski -->
-        <div class="buttons">
-            <button class="btn btn-primary" id="btn-start" onclick="rozpocznij()">
-                ▶️ Rozpocznij tłumaczenie
-            </button>
-            <button class="btn btn-danger" id="btn-stop" onclick="zatrzymaj()" style="display:none">
-                ⏹️ Zatrzymaj
-            </button>
-            <button class="btn btn-success" id="btn-polacz" onclick="polacz()">
-                🔗 Połącz części w jeden PDF
-            </button>
-        </div>
-
-        <!-- Postęp -->
-        <div class="panel" id="panel-postep" style="display:none">
-            <h3>📊 Postęp</h3>
-            <div class="progress-container">
-                <div class="progress-bar" id="progress-bar" style="width: 0%">0%</div>
+        <div id="gemini-extra">
+            <div class="row">
+                <label>Klucz API:</label>
+                <input type="password" id="gemini-key" placeholder="AIzaSy...">
             </div>
-            <div class="info-row">
-                <span class="info-label">Status:</span>
-                <span class="info-value"><span class="status-badge status-gotowy" id="status-badge">gotowy</span></span>
-            </div>
-            <div class="info-row">
-                <span class="info-label">Strona:</span>
-                <span class="info-value" id="strona-info">–</span>
-            </div>
-            <div class="info-row">
-                <span class="info-label">Partia:</span>
-                <span class="info-value" id="partia-info">–</span>
-            </div>
-            <div class="message" id="komunikat"></div>
-        </div>
-
-        <!-- Przetłumaczone części -->
-        <div class="panel">
-            <h3>✅ Przetłumaczone części</h3>
-            <div class="parts-list" id="parts-list">Brak</div>
-        </div>
-
-        <!-- Pobranie -->
-        <div class="panel" id="panel-pobierz" style="display:none">
-            <h3>📥 Pobierz gotowy plik</h3>
-            <div class="buttons">
-                <button class="btn btn-success" onclick="pobierz()">
-                    ⬇️ Pobierz przetłumaczony PDF
-                </button>
-            </div>
+            <p class="hint">💡 Klucz: <a href="https://aistudio.google.com/apikey" target="_blank" style="color:#8af">aistudio.google.com/apikey</a></p>
         </div>
     </div>
 
-    <script>
-        let odswiezanie = null;
+    <div class="buttons">
+        <button class="btn btn-primary" id="btn-start" onclick="rozpocznij()">▶️ Rozpocznij tłumaczenie</button>
+        <button class="btn btn-danger" id="btn-stop" onclick="zatrzymaj()" style="display:none">⏹️ Zatrzymaj</button>
+        <button class="btn btn-success" id="btn-polacz" onclick="polacz()">🔗 Połącz części</button>
+    </div>
 
-        async function zaladujInfo() {
-            const resp = await fetch('/api/info');
-            const dane = await resp.json();
+    <div class="panel" id="panel-postep" style="display:none">
+        <h3>📊 Postęp</h3>
+        <div class="progress-container">
+            <div class="progress-bar" id="progress-bar" style="width:0%">0%</div>
+        </div>
+        <div class="info-row"><span class="info-label">Status:</span><span class="info-value" id="status-text">–</span></div>
+        <div class="info-row"><span class="info-label">Strona:</span><span class="info-value" id="strona-info">–</span></div>
+        <div class="info-row"><span class="info-label">Partia:</span><span class="info-value" id="partia-info">–</span></div>
+        <div class="info-row"><span class="info-label">Info:</span><span class="info-value" id="komunikat">–</span></div>
+    </div>
 
-            let html = '';
-            if (dane.pliki.length > 0) {
-                html += `<div class="info-row"><span class="info-label">Plik:</span><span class="info-value">${dane.pliki[0]}</span></div>`;
-                html += `<div class="info-row"><span class="info-label">Stron:</span><span class="info-value">${dane.total_stron}</span></div>`;
-            } else {
-                html = '<p style="color:#f55">Nie znaleziono pliku PDF w folderze!</p>';
-            }
-            document.getElementById('file-info').innerHTML = html;
+    <div class="panel">
+        <h3>📋 Logi (na żywo)</h3>
+        <div class="log-box" id="log-box">
+            <div class="log-line"><span class="log-time">--:--:--</span> <span class="log-info">Gotowy do pracy. Kliknij "Rozpocznij tłumaczenie".</span></div>
+        </div>
+    </div>
 
-            // Części
-            odswiezCzesci(dane.czesci);
+    <div class="panel">
+        <h3>✅ Przetłumaczone części</h3>
+        <div class="parts-list" id="parts-list">Brak</div>
+    </div>
 
-            // Plik końcowy
-            if (dane.plik_koncowy_istnieje) {
-                document.getElementById('panel-pobierz').style.display = 'block';
-            }
-        }
+    <div class="panel" id="panel-pobierz" style="display:none">
+        <h3>📥 Pobierz</h3>
+        <div class="buttons">
+            <button class="btn btn-success" onclick="pobierz()">⬇️ Pobierz gotowy PDF</button>
+        </div>
+    </div>
+</div>
 
-        function odswiezCzesci(czesci) {
-            const el = document.getElementById('parts-list');
-            if (czesci.length === 0) {
-                el.innerHTML = '<div style="color:#888">Brak – rozpocznij tłumaczenie</div>';
-            } else {
-                el.innerHTML = czesci.map(c => `<div>✅ ${c}</div>`).join('');
-            }
-        }
+<script>
+let timer = null;
 
-        function pokazKlucz() {
-            const silnik = document.getElementById('silnik').value;
-            document.getElementById('klucz-group').style.display = silnik === 'gemini' ? 'flex' : 'none';
-            document.getElementById('gemini-info').style.display = silnik === 'gemini' ? 'block' : 'none';
-        }
+function zmienSilnik() {
+    document.getElementById('gemini-extra').style.display =
+        document.getElementById('silnik').value === 'gemini' ? 'block' : 'none';
+}
 
-        async function rozpocznij() {
-            const odStrony = document.getElementById('od-strony').value || 1;
-            const silnik = document.getElementById('silnik').value;
-            const geminiKey = document.getElementById('gemini-key').value;
+async function zaladujInfo() {
+    const r = await fetch('/api/info');
+    const d = await r.json();
+    let html = '';
+    if (d.pliki.length > 0) {
+        html += `<div class="info-row"><span class="info-label">Plik:</span><span class="info-value">${d.pliki[0]}</span></div>`;
+        html += `<div class="info-row"><span class="info-label">Stron:</span><span class="info-value">${d.total_stron}</span></div>`;
+        document.getElementById('do-strony').value = d.total_stron;
+        document.getElementById('do-strony').max = d.total_stron;
+    } else {
+        html = '<p style="color:#f55">Nie znaleziono pliku PDF!</p>';
+    }
+    document.getElementById('file-info').innerHTML = html;
+    odswiezCzesci(d.czesci);
+    if (d.plik_koncowy) document.getElementById('panel-pobierz').style.display = 'block';
+}
 
-            if (silnik === 'gemini' && !geminiKey) {
-                alert('Wklej klucz API Gemini! Dostaniesz go na: aistudio.google.com/apikey');
-                return;
-            }
+function odswiezCzesci(czesci) {
+    const el = document.getElementById('parts-list');
+    el.innerHTML = czesci.length === 0
+        ? '<div style="color:#666">Brak – rozpocznij tłumaczenie</div>'
+        : czesci.map(c => `<div>✅ ${c}</div>`).join('');
+}
 
-            const resp = await fetch('/api/tlumacz', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({
-                    od_strony: parseInt(odStrony),
-                    silnik: silnik,
-                    gemini_key: geminiKey
-                })
-            });
-            const dane = await resp.json();
+async function rozpocznij() {
+    const od = parseInt(document.getElementById('od-strony').value) || 1;
+    const doo = parseInt(document.getElementById('do-strony').value) || 968;
+    const silnik = document.getElementById('silnik').value;
+    const key = document.getElementById('gemini-key').value;
 
-            if (dane.ok) {
-                document.getElementById('btn-start').style.display = 'none';
-                document.getElementById('btn-stop').style.display = 'inline-block';
-                document.getElementById('panel-postep').style.display = 'block';
-                odswiezanie = setInterval(odswiezPostep, 1000);
-            } else {
-                alert(dane.blad || 'Wystąpił błąd');
-            }
-        }
+    if (silnik === 'gemini' && !key) {
+        alert('Wklej klucz API Gemini!');
+        return;
+    }
 
-        async function zatrzymaj() {
-            await fetch('/api/zatrzymaj', {method: 'POST'});
-            document.getElementById('btn-start').style.display = 'inline-block';
-            document.getElementById('btn-stop').style.display = 'none';
-            if (odswiezanie) clearInterval(odswiezanie);
-        }
+    const r = await fetch('/api/tlumacz', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({od_strony: od, do_strony: doo, silnik, gemini_key: key})
+    });
+    const d = await r.json();
+    if (d.ok) {
+        document.getElementById('btn-start').style.display = 'none';
+        document.getElementById('btn-stop').style.display = 'inline-block';
+        document.getElementById('panel-postep').style.display = 'block';
+        timer = setInterval(odswiezPostep, 1500);
+    } else {
+        alert(d.blad || 'Błąd');
+    }
+}
 
-        async function polacz() {
-            const resp = await fetch('/api/polacz', {method: 'POST'});
-            const dane = await resp.json();
-            if (dane.ok) {
-                alert('✅ Połączono! Plik: ' + dane.plik);
-                document.getElementById('panel-pobierz').style.display = 'block';
-            } else {
-                alert('❌ ' + (dane.blad || 'Błąd'));
-            }
-        }
+async function zatrzymaj() {
+    await fetch('/api/zatrzymaj', {method: 'POST'});
+    document.getElementById('btn-start').style.display = 'inline-block';
+    document.getElementById('btn-stop').style.display = 'none';
+    if (timer) clearInterval(timer);
+}
 
-        function pobierz() {
-            window.location.href = '/api/pobierz';
-        }
+async function polacz() {
+    const r = await fetch('/api/polacz', {method: 'POST'});
+    const d = await r.json();
+    if (d.ok) {
+        alert('✅ Połączono! ' + d.stron + ' stron');
+        document.getElementById('panel-pobierz').style.display = 'block';
+    } else {
+        alert('❌ ' + (d.blad || 'Błąd'));
+    }
+}
 
-        async function odswiezPostep() {
-            const resp = await fetch('/api/postep');
-            const dane = await resp.json();
+function pobierz() { window.location.href = '/api/pobierz'; }
 
-            // Pasek postępu
-            const bar = document.getElementById('progress-bar');
-            bar.style.width = dane.postep + '%';
-            bar.textContent = dane.postep + '%';
+async function odswiezPostep() {
+    const r = await fetch('/api/postep');
+    const d = await r.json();
 
-            // Status
-            const badge = document.getElementById('status-badge');
-            badge.textContent = dane.status;
-            badge.className = 'status-badge status-' + dane.status;
+    const bar = document.getElementById('progress-bar');
+    bar.style.width = d.postep + '%';
+    bar.textContent = d.postep + '%';
 
-            // Info
-            document.getElementById('strona-info').textContent =
-                dane.aktualna_strona + ' / ' + dane.total_stron;
-            document.getElementById('partia-info').textContent =
-                dane.aktualna_partia + ' / ' + dane.total_partii;
-            document.getElementById('komunikat').textContent = dane.komunikat;
+    document.getElementById('status-text').textContent = d.status;
+    document.getElementById('strona-info').textContent = d.aktualna_strona + ' / ' + d.total_stron;
+    document.getElementById('partia-info').textContent = d.aktualna_partia + ' / ' + d.total_partii;
+    document.getElementById('komunikat').textContent = d.komunikat;
 
-            // Części
-            odswiezCzesci(dane.czesci);
+    // Logi
+    const logBox = document.getElementById('log-box');
+    let logHtml = '';
+    for (const log of d.logi) {
+        logHtml += `<div class="log-line"><span class="log-time">${log.czas}</span> <span class="log-${log.poziom}">${log.msg}</span></div>`;
+    }
+    logBox.innerHTML = logHtml;
+    logBox.scrollTop = logBox.scrollHeight;
 
-            // Koniec?
-            if (dane.status === 'zakończone' || dane.status === 'błąd' || dane.status === 'zatrzymany') {
-                document.getElementById('btn-start').style.display = 'inline-block';
-                document.getElementById('btn-stop').style.display = 'none';
-                if (odswiezanie) clearInterval(odswiezanie);
-                if (dane.status === 'zakończone') {
-                    document.getElementById('panel-pobierz').style.display = 'block';
-                }
-            }
-        }
+    // Części
+    odswiezCzesci(d.czesci);
 
-        // Załaduj info na starcie
-        zaladujInfo();
-    </script>
+    // Koniec?
+    if (d.status === 'zakończone' || d.status === 'błąd' || d.status === 'zatrzymany') {
+        document.getElementById('btn-start').style.display = 'inline-block';
+        document.getElementById('btn-stop').style.display = 'none';
+        if (timer) clearInterval(timer);
+    }
+}
+
+zaladujInfo();
+</script>
 </body>
 </html>
 """
 
 
+# === API ===
+
 @app.route('/')
-def strona_glowna():
+def index():
     return render_template_string(STRONA_HTML)
 
 
 @app.route('/api/info')
 def api_info():
     pliki = znajdz_pdf()
-    total_stron = 0
+    total = 0
     if pliki:
         try:
-            doc = fitz.open(pliki[0])
-            total_stron = len(doc)
-            doc.close()
+            d = fitz.open(pliki[0])
+            total = len(d)
+            d.close()
         except:
             pass
-
-    czesci = [os.path.basename(f) for f in policz_przetlumaczone()]
-
     return jsonify({
         "pliki": pliki,
-        "total_stron": total_stron,
-        "czesci": czesci,
-        "plik_koncowy_istnieje": os.path.exists(PLIK_KONCOWY),
+        "total_stron": total,
+        "czesci": [os.path.basename(f) for f in policz_przetlumaczone()],
+        "plik_koncowy": os.path.exists(PLIK_KONCOWY),
     })
 
 
 @app.route('/api/tlumacz', methods=['POST'])
 def api_tlumacz():
     global stan
-
-    if stan["tłumaczenie_aktywne"]:
+    if stan["aktywne"]:
         return jsonify({"ok": False, "blad": "Tłumaczenie już trwa!"})
 
     pliki = znajdz_pdf()
     if not pliki:
-        return jsonify({"ok": False, "blad": "Nie znaleziono pliku PDF"})
+        return jsonify({"ok": False, "blad": "Brak pliku PDF"})
 
     dane = request.json or {}
-    od_strony = dane.get("od_strony", 1)
+    od = dane.get("od_strony", 1)
+    do = dane.get("do_strony", 968)
     silnik = dane.get("silnik", "google")
-    gemini_key = dane.get("gemini_key", "")
+    key = dane.get("gemini_key", "")
 
-    # Reset stanu
+    # Reset
     stan["postep"] = 0
     stan["status"] = "tłumaczę"
     stan["komunikat"] = "Rozpoczynam..."
     stan["aktualna_strona"] = 0
     stan["aktualna_partia"] = 0
+    logi.clear()
+    dodaj_log("Uruchamiam tłumaczenie...")
 
-    # Uruchom tłumaczenie w tle
-    watek = threading.Thread(
-        target=tlumacz_w_tle,
-        args=(pliki[0], od_strony, silnik, gemini_key)
-    )
-    watek.daemon = True
-    watek.start()
+    t = threading.Thread(target=tlumacz_w_tle, args=(pliki[0], od, do, silnik, key))
+    t.daemon = True
+    t.start()
 
     return jsonify({"ok": True})
 
 
 @app.route('/api/zatrzymaj', methods=['POST'])
 def api_zatrzymaj():
-    global stan
-    stan["tłumaczenie_aktywne"] = False
+    stan["aktywne"] = False
+    dodaj_log("Zatrzymywanie...", "warn")
     return jsonify({"ok": True})
 
 
 @app.route('/api/postep')
 def api_postep():
-    czesci = [os.path.basename(f) for f in policz_przetlumaczone()]
     return jsonify({
         "postep": stan["postep"],
         "status": stan["status"],
@@ -623,28 +535,28 @@ def api_postep():
         "total_stron": stan["total_stron"],
         "aktualna_partia": stan["aktualna_partia"],
         "total_partii": stan["total_partii"],
-        "czesci": czesci,
+        "logi": list(logi),
+        "czesci": [os.path.basename(f) for f in policz_przetlumaczone()],
     })
 
 
 @app.route('/api/polacz', methods=['POST'])
 def api_polacz():
-    czesci_pliki = policz_przetlumaczone()
-
-    if not czesci_pliki:
-        return jsonify({"ok": False, "blad": "Brak przetłumaczonych części"})
+    pliki = policz_przetlumaczone()
+    if not pliki:
+        return jsonify({"ok": False, "blad": "Brak części do połączenia"})
 
     try:
         wynik = fitz.open()
-        for plik in czesci_pliki:
-            czesc = fitz.open(plik)
-            wynik.insert_pdf(czesc)
-            czesc.close()
-
+        for p in pliki:
+            c = fitz.open(p)
+            wynik.insert_pdf(c)
+            c.close()
         wynik.save(PLIK_KONCOWY, garbage=4, deflate=True, clean=True)
+        stron = wynik.page_count
         wynik.close()
-
-        return jsonify({"ok": True, "plik": PLIK_KONCOWY, "stron": fitz.open(PLIK_KONCOWY).page_count})
+        dodaj_log(f"✅ Połączono {len(pliki)} części → {PLIK_KONCOWY} ({stron} stron)")
+        return jsonify({"ok": True, "plik": PLIK_KONCOWY, "stron": stron})
     except Exception as e:
         return jsonify({"ok": False, "blad": str(e)})
 
@@ -652,11 +564,7 @@ def api_polacz():
 @app.route('/api/pobierz')
 def api_pobierz():
     if os.path.exists(PLIK_KONCOWY):
-        return send_file(
-            os.path.abspath(PLIK_KONCOWY),
-            as_attachment=True,
-            download_name=PLIK_KONCOWY
-        )
+        return send_file(os.path.abspath(PLIK_KONCOWY), as_attachment=True, download_name=PLIK_KONCOWY)
     return "Plik nie istnieje", 404
 
 
@@ -669,10 +577,6 @@ if __name__ == "__main__":
     print("║  Otwórz w przeglądarce:                                  ║")
     print("║  👉  http://localhost:5000                                ║")
     print("║                                                          ║")
-    print("║  (W Codespaces link pojawi się automatycznie)            ║")
-    print("║                                                          ║")
-    print("║  Aby zatrzymać: Ctrl+C                                   ║")
     print("╚══════════════════════════════════════════════════════════╝")
     print()
-
     app.run(host="0.0.0.0", port=5000, debug=False)
