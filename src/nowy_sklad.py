@@ -48,48 +48,82 @@ FEYNMAN_RED = HexColor("#CC2222")
 
 
 def zarejestruj_czcionki():
-    """Rejestruje czcionki NotoSerif (zbliżone do Latin Modern Roman z oryginału)."""
-    font_dir = "/usr/share/fonts/google-noto"
-
-    # Szukaj czcionek serif
-    serif_paths = {
-        "NotoSerif": "NotoSerif-Regular.ttf",
-        "NotoSerif-Bold": "NotoSerif-Bold.ttf",
-        "NotoSerif-Italic": "NotoSerif-Italic.ttf",
-        "NotoSerif-BoldItalic": "NotoSerif-BoldItalic.ttf",
-    }
-
-    # Fallback na NotoSans jeśli Serif nie dostępny
-    sans_paths = {
-        "NotoSerif": "NotoSans-Regular.ttf",
-        "NotoSerif-Bold": "NotoSans-Bold.ttf",
-        "NotoSerif-Italic": "NotoSans-Italic.ttf",
-        "NotoSerif-BoldItalic": "NotoSans-BoldItalic.ttf",
-    }
-
-    registered = False
-    for name, filename in serif_paths.items():
-        path = os.path.join(font_dir, filename)
-        if os.path.exists(path):
-            pdfmetrics.registerFont(TTFont(name, path))
-            registered = True
-
-    if not registered:
-        # Użyj Sans jako fallback
-        for name, filename in sans_paths.items():
-            path = os.path.join(font_dir, filename)
-            if os.path.exists(path):
-                pdfmetrics.registerFont(TTFont(name, path))
-
-    # Zarejestruj rodzinę czcionek
+    """Rejestruje czcionki do składu PDF. Szuka w wielu lokalizacjach."""
     from reportlab.pdfbase.pdfmetrics import registerFontFamily
-    registerFontFamily(
-        'NotoSerif',
-        normal='NotoSerif',
-        bold='NotoSerif-Bold',
-        italic='NotoSerif-Italic',
-        boldItalic='NotoSerif-BoldItalic',
-    )
+
+    # Możliwe lokalizacje czcionek
+    font_dirs = [
+        "/usr/share/fonts/google-noto",
+        "/usr/share/fonts/truetype/noto",
+        "/usr/share/fonts/noto",
+        "/usr/share/fonts/truetype/dejavu",
+        "/usr/share/fonts",
+    ]
+
+    # Szukamy czcionek w kolejności preferencji
+    font_variants = {
+        "NotoSerif": [
+            "NotoSerif-Regular.ttf", "NotoSans-Regular.ttf", "DejaVuSerif.ttf", "DejaVuSans.ttf"
+        ],
+        "NotoSerif-Bold": [
+            "NotoSerif-Bold.ttf", "NotoSans-Bold.ttf", "DejaVuSerif-Bold.ttf", "DejaVuSans-Bold.ttf"
+        ],
+        "NotoSerif-Italic": [
+            "NotoSerif-Italic.ttf", "NotoSans-Italic.ttf", "DejaVuSerif-Italic.ttf", "DejaVuSans-Oblique.ttf"
+        ],
+        "NotoSerif-BoldItalic": [
+            "NotoSerif-BoldItalic.ttf", "NotoSans-BoldItalic.ttf", "DejaVuSerif-BoldItalic.ttf", "DejaVuSans-BoldOblique.ttf"
+        ],
+    }
+
+    def find_font(filenames):
+        """Szuka pliku czcionki w znanych katalogach."""
+        for font_dir in font_dirs:
+            for filename in filenames:
+                path = os.path.join(font_dir, filename)
+                if os.path.exists(path):
+                    return path
+        # Szukaj rekursywnie
+        for font_dir in font_dirs:
+            if os.path.isdir(font_dir):
+                for root, dirs, files in os.walk(font_dir):
+                    for filename in filenames:
+                        if filename in files:
+                            return os.path.join(root, filename)
+        return None
+
+    # Rejestruj każdy wariant
+    registered_any = False
+    for font_name, candidates in font_variants.items():
+        path = find_font(candidates)
+        if path:
+            try:
+                pdfmetrics.registerFont(TTFont(font_name, path))
+                registered_any = True
+                logger.debug(f"Czcionka {font_name} → {path}")
+            except Exception as e:
+                logger.warning(f"Nie udało się zarejestrować {font_name}: {e}")
+
+    if not registered_any:
+        # Ostateczny fallback – użyj wbudowanej Helvetica
+        logger.warning("Brak zewnętrznych czcionek – używam wbudowanych")
+        # Reportlab ma wbudowaną Helvetica, nie trzeba nic rejestrować
+        # Ale musimy zmienić nazwy w stylach
+        return False
+
+    # Zarejestruj rodzinę
+    try:
+        registerFontFamily(
+            'NotoSerif',
+            normal='NotoSerif',
+            bold='NotoSerif-Bold',
+            italic='NotoSerif-Italic',
+            boldItalic='NotoSerif-BoldItalic',
+        )
+    except Exception as e:
+        logger.warning(f"Nie udało się zarejestrować rodziny czcionek: {e}")
+
+    return True
 
 
 def stworz_style():
