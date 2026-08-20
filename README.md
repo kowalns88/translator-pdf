@@ -2,19 +2,28 @@
 
 Aplikacja do tłumaczenia dokumentów PDF z języka angielskiego na polski z **zachowaniem pełnej szaty graficznej**: układu strony, czcionek, kolorów, obrazów i formatowania.
 
-## 🚀 Najszybszy start – GitHub Codespaces (nic nie instalujesz!)
+## 🚀 Jak uruchomić (nie trzeba nic instalować!)
 
-[![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)](https://codespaces.new/kowalns88/translator-pdf?quickstart=1)
+👉 **[Kliknij tutaj, żeby otworzyć w przeglądarce](https://codespaces.new/kowalns88/translator-pdf?quickstart=1)**
 
-1. **Kliknij przycisk powyżej** (lub: Code → Codespaces → Create codespace)
-2. **Poczekaj ~2 minuty** aż środowisko się zbuduje
-3. **W terminalu wpisz:**
-   ```bash
-   python translate_pdf.py --input The_Feynman_Lectures_on_Physics_Volume_1.pdf --pages 1-10
-   ```
-4. **Pobierz wynik** – kliknij prawym na plik `_PL.pdf` → Download
+Poczekaj 2 minuty, aż środowisko się przygotuje, a potem w terminalu (czarne okienko na dole) wpisz:
 
-> 📖 Szczegółowa instrukcja: [QUICKSTART.md](QUICKSTART.md)
+```
+python tlumacz.py
+```
+
+📖 **Pełna instrukcja krok po kroku:** [QUICKSTART.md](QUICKSTART.md)
+
+## 📋 Krótko – jak to działa
+
+```
+python tlumacz.py              ← tłumacz od początku (po 10 stron)
+python tlumacz.py --od 41      ← wznów od strony 41
+python tlumacz.py --polacz     ← połącz części w jeden PDF
+```
+
+Każda partia 10 stron zapisuje się osobno w folderze `czesci/`.
+Jak program się zawiesi – nic nie tracisz, uruchamiasz od strony gdzie stanął.
 
 ## ✨ Funkcje
 

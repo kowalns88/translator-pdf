@@ -1,5 +1,8 @@
 # Output files
 output/
+czesci/
+*_PL.pdf
+Wyklady_*.pdf
 *.log
 
 # Python
