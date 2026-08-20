@@ -48,7 +48,7 @@ class PDFTranslator:
             )
         from google import genai
         self.gemini_client = genai.Client(api_key=self.gemini_api_key)
-        self.gemini_model = "gemini-2.5-flash"
+        self.gemini_model = "gemini-3.6-flash"
         logger.info(f"Silnik: Google Gemini ({self.gemini_model})")
 
     def _setup_google_translate(self):
