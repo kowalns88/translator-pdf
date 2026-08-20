@@ -11,14 +11,21 @@
 
 UŻYCIE (w terminalu):
 
-  1) Tłumacz całość (od początku):
+  1) Interfejs graficzny (najprostszy sposób):
+     python aplikacja.py
+     → otworzy się strona w przeglądarce z przyciskami
+
+  2) Tłumacz całość (od początku):
      python tlumacz.py
 
-  2) Tłumacz od konkretnej strony (np. program stanął na stronie 40):
+  3) Tłumacz od konkretnej strony (np. program stanął na stronie 40):
      python tlumacz.py --od 41
 
-  3) Połącz wszystkie przetłumaczone części w jeden PDF:
+  4) Połącz wszystkie przetłumaczone części w jeden PDF:
      python tlumacz.py --polacz
+
+  5) Użyj Google Gemini (lepsza jakość):
+     python tlumacz.py --gemini TWOJ_KLUCZ_API
 """
 
 import sys
@@ -48,7 +55,7 @@ ROZMIAR_PARTII = 10  # ile stron na raz
 # =====================================
 
 
-def tlumacz(od_strony: int = 1):
+def tlumacz(od_strony: int = 1, silnik: str = "google", gemini_key: str = ""):
     """
     Tłumaczy PDF partiami po 10 stron.
     Każda partia zapisywana jako osobny plik w folderze 'czesci/'.
@@ -66,16 +73,24 @@ def tlumacz(od_strony: int = 1):
     doc = fitz.open(PLIK_WEJSCIOWY)
     total_pages = len(doc)
 
+    silnik_nazwa = "Google Gemini (wysoka jakość)" if silnik == "gemini" else "Google Translate (darmowy)"
+
     print(f"\n{'='*60}")
     print(f"  📖 TŁUMACZENIE: {PLIK_WEJSCIOWY}")
     print(f"  📄 Stron w dokumencie: {total_pages}")
     print(f"  📦 Rozmiar partii: {ROZMIAR_PARTII} stron")
     print(f"  ▶️  Start od strony: {od_strony}")
+    print(f"  🔤 Silnik: {silnik_nazwa}")
     print(f"  📁 Części zapisywane w: {FOLDER_CZESCI}/")
     print(f"{'='*60}\n")
 
     # Inicjalizacja tłumacza
-    translator = PDFTranslator(source_lang="en", target_lang="pl")
+    translator = PDFTranslator(
+        source_lang="en",
+        target_lang="pl",
+        engine=silnik,
+        gemini_api_key=gemini_key if silnik == "gemini" else None,
+    )
 
     # Oblicz partie
     start_idx = od_strony - 1  # Konwersja na indeks (od 0)
@@ -193,10 +208,19 @@ def pokaz_pomoc():
 
 POLECENIA:
 
-  python tlumacz.py              Tłumacz od początku
+  python aplikacja.py            Otwórz interfejs graficzny (NAJŁATWIEJ)
+
+  python tlumacz.py              Tłumacz od początku (Google Translate)
+  python tlumacz.py --gemini KLUCZ   Tłumacz z Gemini (lepsza jakość)
   python tlumacz.py --od 41      Tłumacz od strony 41
   python tlumacz.py --polacz     Połącz części w jeden PDF
   python tlumacz.py --pomoc      Pokaż tę pomoc
+
+SILNIKI TŁUMACZENIA:
+
+  Google Translate (domyślny) – darmowy, nie wymaga rejestracji
+  Google Gemini (--gemini)   – DUŻO lepsza jakość, wymaga klucza API
+                               Klucz: https://aistudio.google.com/apikey
 
 JAK TO DZIAŁA:
 
@@ -207,12 +231,12 @@ JAK TO DZIAŁA:
 
 PRZYKŁAD:
 
-  $ python tlumacz.py                    ← start
+  $ python tlumacz.py --gemini AIzaSyB...   ← start z Gemini
   ... (program tłumaczy strony 1-10, 11-20, 21-30...)
   ... (program stanął na stronie 35)
-  $ python tlumacz.py --od 31            ← wznowienie od partii
+  $ python tlumacz.py --gemini AIzaSyB... --od 31  ← wznowienie
   ... (dalej: 31-40, 41-50, ...)
-  $ python tlumacz.py --polacz           ← łączy w jeden plik
+  $ python tlumacz.py --polacz                     ← łączy w jeden plik
 """)
 
 
@@ -230,17 +254,31 @@ if __name__ == "__main__":
     elif "--polacz" in args:
         polacz_czesci()
 
-    elif "--od" in args:
-        try:
-            idx = args.index("--od")
-            od_strony = int(args[idx + 1])
-            if od_strony < 1:
-                print("\n❌ Numer strony musi być większy od 0\n")
-                sys.exit(1)
-            tlumacz(od_strony=od_strony)
-        except (IndexError, ValueError):
-            print("\n❌ Podaj numer strony, np: python tlumacz.py --od 41\n")
-            sys.exit(1)
-
     else:
-        tlumacz(od_strony=1)
+        # Parametry
+        od_strony = 1
+        silnik = "google"
+        gemini_key = ""
+
+        if "--od" in args:
+            try:
+                idx = args.index("--od")
+                od_strony = int(args[idx + 1])
+                if od_strony < 1:
+                    print("\n❌ Numer strony musi być większy od 0\n")
+                    sys.exit(1)
+            except (IndexError, ValueError):
+                print("\n❌ Podaj numer strony, np: python tlumacz.py --od 41\n")
+                sys.exit(1)
+
+        if "--gemini" in args:
+            try:
+                idx = args.index("--gemini")
+                gemini_key = args[idx + 1]
+                silnik = "gemini"
+            except (IndexError, ValueError):
+                print("\n❌ Podaj klucz API Gemini, np: python tlumacz.py --gemini AIzaSy...\n")
+                print("   Klucz dostaniesz na: https://aistudio.google.com/apikey\n")
+                sys.exit(1)
+
+        tlumacz(od_strony=od_strony, silnik=silnik, gemini_key=gemini_key)
