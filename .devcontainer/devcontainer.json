@@ -3,6 +3,14 @@
     "image": "mcr.microsoft.com/devcontainers/python:3.11",
     "features": {},
     "postCreateCommand": "pip install -r requirements.txt && sudo apt-get update && sudo apt-get install -y fonts-noto-core",
+    "postStartCommand": "python aplikacja.py &",
+    "forwardPorts": [5000],
+    "portsAttributes": {
+        "5000": {
+            "label": "Tłumacz PDF",
+            "onAutoForward": "openBrowser"
+        }
+    },
     "customizations": {
         "vscode": {
             "extensions": [

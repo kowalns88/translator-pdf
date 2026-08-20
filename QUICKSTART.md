@@ -1,99 +1,123 @@
-# 🚀 Instrukcja – tłumaczenie PDF (dla nie-programistów)
+# Jak uruchomić tłumacz PDF
 
-## Czego potrzebujesz?
-- Konto na GitHub (darmowe) – https://github.com/signup
-- Przeglądarkę internetową
-- **Nic nie instalujesz na komputerze!**
+## Krok 1: Otwórz Codespaces
+
+Wejdź na tę stronę:
+
+https://github.com/kowalns88/translator-pdf
+
+Zobaczysz coś takiego:
+
+```
+┌─────────────────────────────────────────────┐
+│  kowalns88/translator-pdf                   │
+│                                             │
+│  [<> Code ▼]  ← kliknij ten zielony przycisk│
+└─────────────────────────────────────────────┘
+```
+
+Po kliknięciu "Code" pojawi się menu. Kliknij zakładkę **"Codespaces"** (druga z góry), a potem:
+
+```
+┌─────────────────────────────────────┐
+│  Codespaces                         │
+│                                     │
+│  [+ Create codespace on main]       │ ← kliknij to
+└─────────────────────────────────────┘
+```
+
+**Poczekaj 2-3 minuty.** Zobaczysz ładowanie – to normalne, system instaluje wszystko za Ciebie.
 
 ---
 
-## Krok 1: Otwórz środowisko w przeglądarce
+## Krok 2: Uruchom aplikację
 
-Kliknij ten link:
+Gdy Codespace się załaduje, zobaczysz ekran podzielony na:
+- Górna/lewa część: edytor plików (możesz zignorować)
+- **Dolna część: TERMINAL** (czarne okienko z tekstem)
 
-👉 **https://codespaces.new/kowalns88/translator-pdf?quickstart=1**
-
-(Albo: wejdź na https://github.com/kowalns88/translator-pdf → zielony przycisk "Code" → zakładka "Codespaces" → "Create codespace on main")
-
-Poczekaj ~2 minuty – otworzy się edytor kodu w przeglądarce. Wszystko gotowe!
-
----
-
-## Krok 2: Uruchom interfejs graficzny
-
-W terminalu (czarne okienko na dole) wpisz:
+W tym czarnym okienku wpisz dokładnie to:
 
 ```
 python aplikacja.py
 ```
 
-Pojawi się komunikat z linkiem. **W Codespaces automatycznie wyskoczy powiadomienie** – kliknij "Open in Browser". Otworzy się ładna strona z przyciskami.
-
-> Jeśli powiadomienie nie wyskoczyło: w zakładce "PORTS" (obok Terminal) kliknij ikonkę 🌐 przy porcie 5000.
+i naciśnij **Enter**.
 
 ---
 
-## Krok 3: Wybierz silnik tłumaczenia
+## Krok 3: Otwórz interfejs
 
-W interfejsie zobaczysz dropdown "Silnik tłumaczenia":
+Po chwili zobaczysz w prawym dolnym rogu powiadomienie:
 
-### Opcja A: Google Translate (domyślna)
-- ✅ Darmowy, zero rejestracji
-- ⚠️ Średnia jakość – zdania bywają nienaturalne
+```
+┌───────────────────────────────────────────┐
+│  Your application running on port 5000    │
+│  is available.                            │
+│                                           │
+│  [Open in Browser]  ← KLIKNIJ TO         │
+└───────────────────────────────────────────┘
+```
 
-### Opcja B: Google Gemini (zalecana!)
-- ✅ **Dużo lepsza jakość** – naturalne zdania, lepsze terminy naukowe
-- ℹ️ Wymaga klucza API (darmowy z limitem, lub bez limitu z planem Pro)
+Kliknij **"Open in Browser"**. Otworzy się nowa karta z aplikacją.
 
-**Jak dostać klucz API Gemini:**
-1. Wejdź na: https://aistudio.google.com/apikey
-2. Zaloguj się kontem Google (tym z planem Pro)
+> **Jeśli powiadomienie zniknęło:** kliknij na dole ekranu zakładkę "PORTS" (obok "TERMINAL"), znajdź wiersz z portem 5000 i kliknij ikonkę globusa 🌐.
+
+---
+
+## Krok 4: Korzystaj z aplikacji
+
+Teraz masz przed sobą stronę z przyciskami:
+
+1. **Pole "Tłumacz od strony"** – zostaw 1 (albo wpisz inny numer, jeśli wznawiasz)
+
+2. **Silnik tłumaczenia** – wybierz:
+   - "Google Translate" = darmowy, słabsza jakość
+   - "Google Gemini" = lepsza jakość (trzeba wkleić klucz – patrz niżej)
+
+3. **Kliknij niebieski przycisk "Rozpocznij tłumaczenie"**
+
+4. Zobaczysz pasek postępu – czekaj.
+
+5. Jak skończy → kliknij **"Połącz części w jeden PDF"**
+
+6. Kliknij **"Pobierz"** → plik zapisze się na Twoim komputerze
+
+---
+
+## Skąd wziąć klucz API Gemini (opcjonalnie)
+
+Jeśli chcesz lepszą jakość tłumaczenia:
+
+1. Otwórz: https://aistudio.google.com/apikey
+2. Zaloguj się kontem Google
 3. Kliknij "Create API Key"
-4. Skopiuj klucz i wklej go w pole w aplikacji
+4. Skopiuj klucz (wygląda jak: AIzaSyB1abc...)
+5. Wklej go w pole "Klucz API Gemini" w aplikacji
 
 ---
 
-## Krok 4: Kliknij "Rozpocznij tłumaczenie"
+## Co jeśli program się zawiesi?
 
-Gotowe! Program tłumaczy po 10 stron. Zobaczysz pasek postępu.
-
----
-
-## Krok 5: Jeśli się zawiesi
-
-Bez stresu! Wpisz numer strony w pole "Tłumacz od strony" i kliknij znowu.
-Program pominie to, co już przetłumaczył.
+1. Wróć do zakładki Codespaces
+2. W terminalu wpisz: `python aplikacja.py`
+3. Otwórz znowu interfejs (krok 3)
+4. W pole "Tłumacz od strony" wpisz numer strony, na której stanęło
+5. Kliknij "Rozpocznij" – program pominie to, co już przetłumaczył
 
 ---
 
-## Krok 6: Połącz i pobierz
+## Co jeśli zamknę przeglądarkę?
 
-Gdy skończy – kliknij przycisk **"Połącz części w jeden PDF"**, a potem **"Pobierz"**.
+Nic złego! Codespace dalej działa. Wróć na:
+https://github.com/codespaces
 
-🎉 **Gotowe!**
-
----
-
-## ⏱️ Ile to trwa?
-
-| Stron | Google Translate | Google Gemini |
-|-------|-----------------|---------------|
-| 10 | ~30 sekund | ~15 sekund |
-| 100 | ~5 minut | ~3 minuty |
-| 968 (cała książka) | ~50 minut | ~30 minut |
+Zobaczysz swoją otwartą sesję – kliknij na nią.
 
 ---
 
-## ❓ Najczęstsze pytania
+## Ile to kosztuje?
 
-**Czy to coś kosztuje?**
-→ Codespaces: darmowe 60h/miesiąc. Google Translate: darmowy. Gemini: darmowy limit 1500 zapytań/dzień (wystarczy na ~300 stron), lub bez limitu z planem Google One AI Pro.
-
-**Mam plan Google One AI Pro – jak go użyć?**
-→ Wystarczy wygenerować klucz na aistudio.google.com/apikey – będąc zalogowanym na konto z planem Pro, automatycznie masz wyższe limity.
-
-**Mogę zamknąć przeglądarkę w trakcie?**
-→ Tak! Codespace działa w tle. Wróć: https://github.com/codespaces
-
-**Program wyrzucił błąd**
-→ Kliknij "Rozpocznij" z wyższym numerem strony (od tej, na której stanął).
+- **GitHub Codespaces:** 60 darmowych godzin miesięcznie (wystarczy)
+- **Google Translate:** za darmo
+- **Google Gemini:** darmowy limit ~300 stron/dzień, bez limitu z planem Google One AI Pro

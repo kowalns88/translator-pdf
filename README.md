@@ -1,29 +1,36 @@
-# 📄 PDF Translator – English to Polish
+# 📄 Tłumacz PDF – angielski → polski
 
-Aplikacja do tłumaczenia dokumentów PDF z języka angielskiego na polski z **zachowaniem pełnej szaty graficznej**: układu strony, czcionek, kolorów, obrazów i formatowania.
+Tłumaczy PDF zachowując układ strony, obrazy, kolory i formatowanie.
 
-## 🚀 Jak uruchomić (nie trzeba nic instalować!)
+---
 
-👉 **[Kliknij tutaj, żeby otworzyć w przeglądarce](https://codespaces.new/kowalns88/translator-pdf?quickstart=1)**
+## Jak uruchomić (nie trzeba nic instalować)
 
-Poczekaj 2 minuty, aż środowisko się przygotuje, a potem w terminalu (czarne okienko na dole) wpisz:
+### 1. Otwórz Codespaces
+
+Na stronie tego repozytorium kliknij zielony przycisk **"Code"** → zakładka **"Codespaces"** → **"Create codespace on main"**
+
+Poczekaj 2-3 minuty.
+
+### 2. Uruchom aplikację
+
+W terminalu (czarne okienko na dole) wpisz:
 
 ```
-python tlumacz.py
+python aplikacja.py
 ```
 
-📖 **Pełna instrukcja krok po kroku:** [QUICKSTART.md](QUICKSTART.md)
+### 3. Otwórz interfejs
 
-## 📋 Krótko – jak to działa
+Kliknij **"Open in Browser"** gdy pojawi się powiadomienie.
 
-```
-python tlumacz.py              ← tłumacz od początku (po 10 stron)
-python tlumacz.py --od 41      ← wznów od strony 41
-python tlumacz.py --polacz     ← połącz części w jeden PDF
-```
+### 4. Tłumacz
 
-Każda partia 10 stron zapisuje się osobno w folderze `czesci/`.
-Jak program się zawiesi – nic nie tracisz, uruchamiasz od strony gdzie stanął.
+Kliknij przycisk "Rozpocznij tłumaczenie" i czekaj.
+
+---
+
+📖 **Szczegółowa instrukcja krok po kroku:** [QUICKSTART.md](QUICKSTART.md)
 
 ## ✨ Funkcje
 
