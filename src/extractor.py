@@ -8,7 +8,7 @@ Uses PyMuPDF to extract text spans with:
 - Flags (bold, italic, etc.)
 """
 
-import fitz  # PyMuPDF
+import fitz  # PyMuPDF (also works as: import pymupdf as fitz)
 import re
 from typing import List, Dict, Any, Optional
 from config import SKIP_PATTERNS, MIN_TEXT_LENGTH

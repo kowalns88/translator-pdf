@@ -2,6 +2,20 @@
 
 Aplikacja do tłumaczenia dokumentów PDF z języka angielskiego na polski z **zachowaniem pełnej szaty graficznej**: układu strony, czcionek, kolorów, obrazów i formatowania.
 
+## 🚀 Najszybszy start – GitHub Codespaces (nic nie instalujesz!)
+
+[![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)](https://codespaces.new/kowalns88/translator-pdf?quickstart=1)
+
+1. **Kliknij przycisk powyżej** (lub: Code → Codespaces → Create codespace)
+2. **Poczekaj ~2 minuty** aż środowisko się zbuduje
+3. **W terminalu wpisz:**
+   ```bash
+   python translate_pdf.py --input The_Feynman_Lectures_on_Physics_Volume_1.pdf --pages 1-10
+   ```
+4. **Pobierz wynik** – kliknij prawym na plik `_PL.pdf` → Download
+
+> 📖 Szczegółowa instrukcja: [QUICKSTART.md](QUICKSTART.md)
+
 ## ✨ Funkcje
 
 - 🔤 **Tłumaczenie tekstu** z angielskiego na polski (Google Translate, bezpłatnie)

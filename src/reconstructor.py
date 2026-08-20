@@ -7,7 +7,10 @@ Strategy:
 3. Insert translated text at the same position with matching style using TTF fonts
 """
 
-import fitz  # PyMuPDF
+try:
+    import fitz  # PyMuPDF legacy import
+except ImportError:
+    import pymupdf as fitz  # PyMuPDF new import
 import logging
 import os
 from typing import List, Dict, Any, Tuple, Optional
