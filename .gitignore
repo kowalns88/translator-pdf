@@ -1,0 +1,25 @@
+# Output files
+output/
+czesci/
+*_PL.pdf
+Wyklady_*.pdf
+*.log
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+venv/
+.venv/
+.env
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db

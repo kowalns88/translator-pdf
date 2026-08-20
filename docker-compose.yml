@@ -1,0 +1,11 @@
+# Docker Compose - łatwe uruchamianie tłumacza PDF
+# Użycie: docker compose run translator --input /data/plik.pdf --pages 1-10
+
+services:
+  translator:
+    build: .
+    volumes:
+      - ./:/data    # Montuje bieżący katalog jako /data w kontenerze
+    working_dir: /app
+    entrypoint: ["python", "translate_pdf.py"]
+    command: ["--help"]
