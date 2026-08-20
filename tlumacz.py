@@ -105,14 +105,47 @@ def tlumacz(od_strony: int = 1, silnik: str = "google", gemini_key: str = ""):
                 elementy.append({"typ": "plik_obrazka", "sciezka": path})
             strony.append({"numer": page_num + 1, "elementy": elementy})
 
-        # 2. Tłumacz
+        # 2. Tłumacz – CAŁA STRONA w jednym zapytaniu
         for strona in strony:
+            # Zbierz cały tekst strony w jeden blok
+            page_text_parts = []
             for elem in strona["elementy"]:
-                if elem.get("typ") in ("numer_strony", "plik_obrazka", "numer_rozdzialu"):
+                if elem.get("typ") in ("numer_strony", "plik_obrazka"):
                     continue
                 tekst = elem.get("tekst", "").strip()
-                if tekst and len(tekst) > 2:
-                    elem["tekst"] = translator.translate_text(tekst)
+                if tekst:
+                    page_text_parts.append(tekst)
+
+            full_page_text = "\n\n".join(page_text_parts)
+
+            if not full_page_text.strip():
+                continue
+
+            # Tłumacz całą stronę jednym zapytaniem
+            try:
+                translated_page = translator.translate_page(full_page_text)
+            except RuntimeError as e:
+                # Tokeny wyczerpane – STOP
+                print(f"\n  🛑 {e}")
+                print(f"  Wznów od strony: {strona['numer']}")
+                doc.close()
+                return
+
+            # Rozdziel przetłumaczony tekst z powrotem na elementy
+            translated_parts = translated_page.split("\n\n")
+            elem_idx = 0
+            for elem in strona["elementy"]:
+                if elem.get("typ") in ("numer_strony", "plik_obrazka"):
+                    continue
+                tekst = elem.get("tekst", "").strip()
+                if tekst and elem_idx < len(translated_parts):
+                    elem["tekst"] = translated_parts[elem_idx]
+                    elem_idx += 1
+                elif tekst:
+                    # Brakuje odpowiednika – zostaw oryginał oznaczony
+                    elem["tekst"] = tekst  # fallback
+
+            print(f"    Strona {strona['numer']} ✓")
 
         # 3. Wygeneruj PDF
         zbuduj_pdf(strony, nazwa_pliku, "Wykłady Feynmana z Fizyki")

@@ -1,24 +1,46 @@
 """
-Translation Layer - Handles text translation from English to Polish.
+Translation Layer – tłumaczenie stronami (nie fragmentami).
 
-Supports multiple translation engines:
-- Google Gemini (najlepsza jakość, wymaga klucza API z Google AI Studio)
-- Google Translate (darmowy, średnia jakość, bez rejestracji)
+Strategia:
+- Wysyłaj CAŁĄ STRONĘ tekstu w jednym zapytaniu do Gemini (lepszy kontekst)
+- Pomijaj formuły matematyczne i krótkie fragmenty
+- Przy błędzie 429: czekaj i ponów próbę (max 3 razy)
+- Przy wyczerpaniu: ZATRZYMAJ SIĘ natychmiast
 """
 
 import os
+import re
 import time
 import logging
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 
 logger = logging.getLogger(__name__)
 
+# Wzorce tekstów do pominięcia (formuły, numery, symbole)
+SKIP_PATTERNS = [
+    r'^\d+[\.\,]?\d*$',             # Same numery: "6.7", "1024"
+    r'^[=+\-\*/\^(){}\[\]<>≥≤±√∑∫]+$',  # Same symbole matematyczne
+    r'^\s*$',                          # Puste
+    r'^[A-Z]\s*$',                     # Sama litera: "N", "D"
+    r'^\(?[0-9]+\.[0-9]+\)?$',        # Numery równań: (6.1), (6.7)
+    r'^Fig\.\s*\d',                    # Opisy rysunków - do osobnego tłumaczenia
+    r'^[ivxlcIVXLC]+$',               # Numery rzymskie
+]
+
+
+def should_skip(text: str) -> bool:
+    """Czy tekst powinien być pominięty w tłumaczeniu."""
+    t = text.strip()
+    if len(t) < 3:
+        return True
+    for pattern in SKIP_PATTERNS:
+        if re.match(pattern, t):
+            return True
+    return False
+
 
 class PDFTranslator:
-    """
-    Translates text using selected engine.
-    Handles batching, caching, and error recovery.
-    """
+    """Tłumacz PDF – wysyła całe strony do API."""
 
     def __init__(
         self,
@@ -32,6 +54,8 @@ class PDFTranslator:
         self.engine = engine
         self.cache: Dict[str, str] = {}
         self.gemini_api_key = gemini_api_key or os.environ.get("GEMINI_API_KEY", "")
+        self.consecutive_errors = 0
+        self.is_exhausted = False  # Flaga: tokeny wyczerpane
 
         if self.engine == "gemini":
             self._setup_gemini()
@@ -39,208 +63,154 @@ class PDFTranslator:
             self._setup_google_translate()
 
     def _setup_gemini(self):
-        """Configure Google Gemini as translation engine."""
         if not self.gemini_api_key:
             raise ValueError(
-                "Brak klucza API Gemini!\n"
-                "Ustaw go w pliku .env lub podaj w interfejsie.\n"
-                "Klucz możesz wygenerować na: https://aistudio.google.com/apikey"
+                "Brak klucza API Gemini! Wygeneruj na: https://aistudio.google.com/apikey"
             )
         from google import genai
         self.gemini_client = genai.Client(api_key=self.gemini_api_key)
         self.gemini_model = "gemini-3.6-flash"
-        logger.info(f"Silnik: Google Gemini ({self.gemini_model})")
 
     def _setup_google_translate(self):
-        """Configure free Google Translate as fallback."""
         from deep_translator import GoogleTranslator
         self.google_translator = GoogleTranslator(
             source=self.source_lang, target=self.target_lang
         )
-        logger.info("Silnik: Google Translate (darmowy)")
 
-    def translate_text(self, text: str) -> str:
-        """Translate a single text string. Uses cache."""
-        if not text or not text.strip():
-            return text
+    def translate_page(self, page_text: str) -> str:
+        """
+        Tłumaczy CAŁĄ STRONĘ naraz (jeden request do API).
+        To daje najlepszą jakość i oszczędza tokeny.
+        """
+        if not page_text or not page_text.strip():
+            return page_text
 
-        cache_key = text.strip()
+        if self.is_exhausted:
+            raise RuntimeError("Tokeny wyczerpane – zatrzymaj tłumaczenie")
+
+        # Sprawdź cache
+        cache_key = page_text.strip()[:200]  # Klucz = pierwsze 200 znaków
         if cache_key in self.cache:
             return self.cache[cache_key]
 
+        # Tłumacz
         try:
             if self.engine == "gemini":
-                translated = self._translate_gemini(text)
+                translated = self._translate_page_gemini(page_text)
             else:
-                translated = self._translate_google(text)
+                translated = self._translate_page_google(page_text)
+
+            self.consecutive_errors = 0
 
             if translated:
                 self.cache[cache_key] = translated
                 return translated
-            return text
+            return page_text
+
         except Exception as e:
-            logger.warning(f"Błąd tłumaczenia '{text[:50]}...': {e}")
-            return text
+            return self._handle_error(e, page_text)
 
-    def _translate_gemini(self, text: str) -> str:
-        """Translate using Google Gemini."""
+    def _translate_page_gemini(self, text: str) -> str:
+        """Tłumaczy stronę przez Gemini – jeden request."""
         prompt = (
-            f"Przetłumacz poniższy tekst z angielskiego na polski. "
-            f"Zachowaj formatowanie i styl. Nie dodawaj żadnych wyjaśnień, "
-            f"zwróć TYLKO przetłumaczony tekst.\n\n"
-            f"Tekst: {text}"
+            "Przetłumacz poniższy tekst z angielskiego na polski.\n"
+            "ZASADY:\n"
+            "- Zachowaj podział na akapity (puste linie między akapitami)\n"
+            "- NIE tłumacz wzorów matematycznych, numerów równań (np. (6.1)), "
+            "symboli (D², N, σ, √N)\n"
+            "- NIE tłumacz numerów rozdziałów (np. '6-2', '7-1')\n"
+            "- Zachowaj odwołania do rysunków (Fig. → Rys.)\n"
+            "- Zwróć TYLKO przetłumaczony tekst, bez komentarzy\n\n"
+            f"TEKST DO TŁUMACZENIA:\n\n{text}"
         )
-        response = self.gemini_client.models.generate_content(
-            model=self.gemini_model,
-            contents=prompt,
-        )
-        return response.text.strip()
 
-    def _translate_google(self, text: str) -> str:
-        """Translate using free Google Translate."""
-        return self.google_translator.translate(text)
+        # Retry logic: max 3 próby z oczekiwaniem
+        for attempt in range(3):
+            try:
+                response = self.gemini_client.models.generate_content(
+                    model=self.gemini_model,
+                    contents=prompt,
+                )
+                return response.text.strip()
+            except Exception as e:
+                error_str = str(e)
 
-    def translate_batch(self, texts: List[str]) -> List[str]:
-        """
-        Translate a batch of texts.
-        For Gemini: groups texts into larger prompts for efficiency.
-        For Google Translate: translates one by one.
-        """
-        if self.engine == "gemini":
-            return self._translate_batch_gemini(texts)
-        else:
-            return self._translate_batch_google(texts)
+                # Wyczerpanie tokenów – STOP natychmiast
+                if "RESOURCE_EXHAUSTED" in error_str or "429" in error_str:
+                    if "prepayment credits are depleted" in error_str:
+                        logger.error("🛑 PREPAID WYCZERPANE! Doładuj konto w AI Studio.")
+                        self.is_exhausted = True
+                        raise
 
-    def _translate_batch_gemini(self, texts: List[str]) -> List[str]:
-        """
-        Batch translation with Gemini.
-        Groups multiple texts into one prompt for efficiency (fewer API calls).
-        """
-        results = []
-        BATCH_SIZE = 20  # Ile tekstów w jednym zapytaniu do Gemini
+                    # Rate limit – czekaj i ponów
+                    retry_match = re.search(r'retry in (\d+)', error_str)
+                    wait_time = int(retry_match.group(1)) + 2 if retry_match else 35
+                    
+                    if attempt < 2:
+                        logger.warning(f"⏳ Rate limit – czekam {wait_time}s (próba {attempt+1}/3)")
+                        time.sleep(wait_time)
+                        continue
+                    else:
+                        logger.error("🛑 3x rate limit z rzędu – STOP")
+                        self.is_exhausted = True
+                        raise
 
-        for i in range(0, len(texts), BATCH_SIZE):
-            batch = texts[i:i + BATCH_SIZE]
-            batch_results = []
+                # Inny błąd – nie ponawiaj
+                raise
 
-            # Filtruj – sprawdź cache i puste
-            to_translate = []
-            indices = []
-            for idx, text in enumerate(batch):
-                if not text or not text.strip():
-                    batch_results.append(text)
-                elif text.strip() in self.cache:
-                    batch_results.append(self.cache[text.strip()])
-                else:
-                    to_translate.append(text)
-                    indices.append(idx)
-                    batch_results.append(None)  # placeholder
+        return text  # Fallback
 
-            if to_translate:
-                try:
-                    # Buduj prompt z numerowanymi liniami
-                    numbered_texts = "\n".join(
-                        f"[{j+1}] {t}" for j, t in enumerate(to_translate)
-                    )
-                    prompt = (
-                        f"Przetłumacz poniższe teksty z angielskiego na polski. "
-                        f"Zachowaj numerację [1], [2], itd. "
-                        f"Nie dodawaj wyjaśnień. Zwróć TYLKO przetłumaczone linie "
-                        f"z zachowaną numeracją.\n\n{numbered_texts}"
-                    )
+    def _translate_page_google(self, text: str) -> str:
+        """Tłumaczy stronę przez Google Translate (dzieli na kawałki po 5000 znaków)."""
+        MAX_CHUNK = 4900  # Google Translate limit
 
-                    response = self.gemini_client.models.generate_content(
-                        model=self.gemini_model,
-                        contents=prompt,
-                    )
+        if len(text) <= MAX_CHUNK:
+            return self.google_translator.translate(text)
 
-                    # Parsuj odpowiedź
-                    translated_lines = self._parse_numbered_response(
-                        response.text, len(to_translate)
-                    )
+        # Podziel na kawałki po akapitach
+        paragraphs = text.split('\n\n')
+        chunks = []
+        current_chunk = ""
 
-                    # Wstaw przetłumaczone teksty
-                    translate_idx = 0
-                    for idx in range(len(batch_results)):
-                        if batch_results[idx] is None:
-                            if translate_idx < len(translated_lines):
-                                translated = translated_lines[translate_idx]
-                                batch_results[idx] = translated
-                                # Cache
-                                orig = to_translate[translate_idx]
-                                self.cache[orig.strip()] = translated
-                            else:
-                                batch_results[idx] = to_translate[translate_idx] if translate_idx < len(to_translate) else ""
-                            translate_idx += 1
+        for para in paragraphs:
+            if len(current_chunk) + len(para) + 2 > MAX_CHUNK:
+                if current_chunk:
+                    chunks.append(current_chunk)
+                current_chunk = para
+            else:
+                current_chunk += ("\n\n" + para if current_chunk else para)
 
-                except Exception as e:
-                    logger.warning(f"Gemini batch error: {e}, falling back to single")
-                    # Fallback: tłumacz pojedynczo
-                    translate_idx = 0
-                    for idx in range(len(batch_results)):
-                        if batch_results[idx] is None:
-                            text = to_translate[translate_idx]
-                            batch_results[idx] = self.translate_text(text)
-                            translate_idx += 1
+        if current_chunk:
+            chunks.append(current_chunk)
 
-            results.extend(batch_results)
+        # Tłumacz kawałki
+        translated_chunks = []
+        for chunk in chunks:
+            translated = self.google_translator.translate(chunk)
+            translated_chunks.append(translated)
+            time.sleep(0.3)  # Rate limiting
 
-            # Mały delay między batchami
-            if i + BATCH_SIZE < len(texts):
-                time.sleep(0.3)
+        return "\n\n".join(translated_chunks)
 
-        return results
+    def _handle_error(self, e: Exception, original_text: str) -> str:
+        """Obsługa błędów – decyduje czy zatrzymać czy kontynuować."""
+        error_str = str(e)
+        self.consecutive_errors += 1
 
-    def _parse_numbered_response(self, response_text: str, expected_count: int) -> List[str]:
-        """Parse Gemini's numbered response into a list of translations."""
-        lines = response_text.strip().split("\n")
-        results = []
+        if "RESOURCE_EXHAUSTED" in error_str or "429" in error_str:
+            self.is_exhausted = True
+            raise RuntimeError(f"Tokeny wyczerpane: {error_str[:100]}")
 
-        for line in lines:
-            line = line.strip()
-            if not line:
-                continue
-            # Usuń numerację [1], [2], etc.
-            import re
-            cleaned = re.sub(r'^\[\d+\]\s*', '', line)
-            if cleaned:
-                results.append(cleaned)
+        if self.consecutive_errors >= 5:
+            self.is_exhausted = True
+            raise RuntimeError(f"Za dużo błędów z rzędu ({self.consecutive_errors})")
 
-        # Jeśli nie udało się sparsować – fallback na całość
-        if len(results) < expected_count:
-            # Spróbuj po prostu podzielić na linie
-            all_lines = [l.strip() for l in response_text.strip().split("\n") if l.strip()]
-            if len(all_lines) >= expected_count:
-                results = all_lines[:expected_count]
+        logger.warning(f"Błąd tłumaczenia (kontynuuję): {error_str[:80]}")
+        return original_text
 
-        return results
-
-    def _translate_batch_google(self, texts: List[str]) -> List[str]:
-        """Batch translation with Google Translate (one by one with delay)."""
-        results = []
-        for i, text in enumerate(texts):
-            if not text or not text.strip():
-                results.append(text)
-                continue
-            results.append(self.translate_text(text))
-            # Rate limiting
-            if i > 0 and i % 50 == 0:
-                time.sleep(0.5)
-        return results
-
-    def translate_spans(self, spans: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """Translate spans, adding 'translated_text' to each."""
-        texts = [span["text"] for span in spans]
-        translated_texts = self.translate_batch(texts)
-
-        for span, translated in zip(spans, translated_texts):
-            span["translated_text"] = translated
-
-        return spans
+    def translate_text(self, text: str) -> str:
+        """Tłumaczenie pojedynczego tekstu (kompatybilność wsteczna)."""
+        return self.translate_page(text)
 
     def get_cache_stats(self) -> Dict[str, int]:
-        """Return translation cache statistics."""
-        return {
-            "cached_entries": len(self.cache),
-            "unique_translations": len(set(self.cache.values())),
-        }
+        return {"cached_entries": len(self.cache)}

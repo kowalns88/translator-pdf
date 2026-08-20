@@ -150,43 +150,56 @@ def tlumacz_w_tle(plik_wejsciowy, od_strony, do_strony, silnik, gemini_key):
             if not stan["aktywne"]:
                 break
 
-            # 2. Tłumacz
-            bledy_w_partii = 0
+            # 2. Tłumacz – CAŁA STRONA w jednym zapytaniu do API
             for strona in strony:
                 if not stan["aktywne"]:
                     break
 
                 stan["aktualna_strona"] = strona["numer"]
 
+                # Zbierz tekst całej strony
+                page_text_parts = []
                 for elem in strona["elementy"]:
-                    if elem.get("typ") in ("numer_strony", "plik_obrazka", "numer_rozdzialu"):
+                    if elem.get("typ") in ("numer_strony", "plik_obrazka"):
                         continue
                     tekst = elem.get("tekst", "").strip()
-                    if tekst and len(tekst) > 2:
-                        try:
-                            przetlumaczony = translator.translate_text(tekst)
-                            elem["tekst"] = przetlumaczony
-                        except Exception as e:
-                            bledy_w_partii += 1
-                            err_msg = str(e)[:100]
-                            dodaj_log(f"⚠️ Błąd str.{strona['numer']}: {err_msg}", "error")
+                    if tekst:
+                        page_text_parts.append(tekst)
 
-                            # Wykryj wyczerpanie tokenów
-                            if "quota" in str(e).lower() or "rate" in str(e).lower() or "429" in str(e):
-                                dodaj_log("🛑 LIMIT TOKENÓW WYCZERPANY! Zatrzymuję.", "error")
-                                dodaj_log(f"Wznów jutro od strony {strona['numer']}: --od {strona['numer']}", "error")
-                                stan["status"] = "błąd"
-                                stan["komunikat"] = f"Limit tokenów! Wznów od strony {strona['numer']}"
-                                stan["aktywne"] = False
-                                doc.close()
-                                return
+                full_page_text = "\n\n".join(page_text_parts)
+
+                if not full_page_text.strip():
+                    strony_przetlumaczone += 1
+                    stan["postep"] = int(strony_przetlumaczone / stron_do_tlumaczenia * 100)
+                    continue
+
+                # Tłumacz całą stronę jednym zapytaniem
+                try:
+                    translated_page = translator.translate_page(full_page_text)
+                except (RuntimeError, Exception) as e:
+                    err_msg = str(e)[:150]
+                    dodaj_log(f"🛑 STOP str.{strona['numer']}: {err_msg}", "error")
+                    dodaj_log(f"Wznów od strony {strona['numer']}", "error")
+                    stan["status"] = "błąd"
+                    stan["komunikat"] = f"Wznów od strony {strona['numer']}"
+                    stan["aktywne"] = False
+                    doc.close()
+                    return
+
+                # Rozdziel tłumaczenie z powrotem na elementy
+                translated_parts = translated_page.split("\n\n")
+                elem_idx = 0
+                for elem in strona["elementy"]:
+                    if elem.get("typ") in ("numer_strony", "plik_obrazka"):
+                        continue
+                    tekst = elem.get("tekst", "").strip()
+                    if tekst and elem_idx < len(translated_parts):
+                        elem["tekst"] = translated_parts[elem_idx]
+                        elem_idx += 1
 
                 strony_przetlumaczone += 1
                 stan["postep"] = int(strony_przetlumaczone / stron_do_tlumaczenia * 100)
-
-                # Log co 5 stron
-                if strona["numer"] % 5 == 0:
-                    dodaj_log(f"  Strona {strona['numer']} OK")
+                dodaj_log(f"  Strona {strona['numer']} ✓ (1 zapytanie)")
 
             if not stan["aktywne"]:
                 break
@@ -194,11 +207,7 @@ def tlumacz_w_tle(plik_wejsciowy, od_strony, do_strony, silnik, gemini_key):
             # 3. Generuj PDF
             try:
                 zbuduj_pdf(strony, nazwa_pliku, "Wykłady Feynmana z Fizyki")
-                elapsed = time.time() - stan["czas_start"]
-                if bledy_w_partii > 0:
-                    dodaj_log(f"✅ Zapisano {nazwa_pliku} (⚠️ {bledy_w_partii} błędów)", "warn")
-                else:
-                    dodaj_log(f"✅ Zapisano {nazwa_pliku}")
+                dodaj_log(f"✅ Zapisano {nazwa_pliku}")
             except Exception as e:
                 dodaj_log(f"❌ Błąd zapisu PDF: {e}", "error")
 
