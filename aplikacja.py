@@ -45,7 +45,7 @@ logi = deque(maxlen=200)
 
 FOLDER_CZESCI = "czesci"
 FOLDER_OBRAZKI = "obrazki"
-ROZMIAR_PARTII = 10
+ROZMIAR_PARTII = 50  # 50 stron na partię = 1 zapytanie API
 PLIK_KONCOWY = "Wyklady_Feynmana_z_Fizyki_Tom_1_PL.pdf"
 
 
@@ -150,14 +150,12 @@ def tlumacz_w_tle(plik_wejsciowy, od_strony, do_strony, silnik, gemini_key):
             if not stan["aktywne"]:
                 break
 
-            # 2. Tłumacz – CAŁA STRONA w jednym zapytaniu do API
+            # 2. Tłumacz – CAŁA PARTIA (50 stron) w 1 zapytaniu API
+            if not stan["aktywne"]:
+                break
+
+            all_pages_text = []
             for strona in strony:
-                if not stan["aktywne"]:
-                    break
-
-                stan["aktualna_strona"] = strona["numer"]
-
-                # Zbierz tekst całej strony
                 page_text_parts = []
                 for elem in strona["elementy"]:
                     if elem.get("typ") in ("numer_strony", "plik_obrazka"):
@@ -165,29 +163,35 @@ def tlumacz_w_tle(plik_wejsciowy, od_strony, do_strony, silnik, gemini_key):
                     tekst = elem.get("tekst", "").strip()
                     if tekst:
                         page_text_parts.append(tekst)
+                all_pages_text.append("\n\n".join(page_text_parts))
 
-                full_page_text = "\n\n".join(page_text_parts)
+            SEPARATOR = "\n\n===STRONA===\n\n"
+            full_batch_text = SEPARATOR.join(all_pages_text)
 
-                if not full_page_text.strip():
-                    strony_przetlumaczone += 1
-                    stan["postep"] = int(strony_przetlumaczone / stron_do_tlumaczenia * 100)
-                    continue
+            if not full_batch_text.strip():
+                strony_przetlumaczone += len(strony)
+                stan["postep"] = int(strony_przetlumaczone / stron_do_tlumaczenia * 100)
+                partia_nr += 1
+                continue
 
-                # Tłumacz całą stronę jednym zapytaniem
-                try:
-                    translated_page = translator.translate_page(full_page_text)
-                except (RuntimeError, Exception) as e:
-                    err_msg = str(e)[:150]
-                    dodaj_log(f"🛑 STOP str.{strona['numer']}: {err_msg}", "error")
-                    dodaj_log(f"Wznów od strony {strona['numer']}", "error")
-                    stan["status"] = "błąd"
-                    stan["komunikat"] = f"Wznów od strony {strona['numer']}"
-                    stan["aktywne"] = False
-                    doc.close()
-                    return
+            dodaj_log(f"  Wysyłam {len(strony)} stron w 1 zapytaniu...")
 
-                # Rozdziel tłumaczenie z powrotem na elementy
-                translated_parts = translated_page.split("\n\n")
+            try:
+                translated_batch = translator.translate_page(full_batch_text)
+            except (RuntimeError, Exception) as e:
+                err_msg = str(e)[:150]
+                dodaj_log(f"🛑 STOP: {err_msg}", "error")
+                dodaj_log(f"Wznów od strony {strony[0]['numer']}", "error")
+                stan["status"] = "błąd"
+                stan["komunikat"] = f"Wznów od strony {strony[0]['numer']}"
+                stan["aktywne"] = False
+                doc.close()
+                return
+
+            translated_pages = [p.strip() for p in translated_batch.split("===STRONA===")]
+
+            for i, strona in enumerate(strony):
+                translated_parts = translated_pages[i].split("\n\n") if i < len(translated_pages) else []
                 elem_idx = 0
                 for elem in strona["elementy"]:
                     if elem.get("typ") in ("numer_strony", "plik_obrazka"):
@@ -197,9 +201,10 @@ def tlumacz_w_tle(plik_wejsciowy, od_strony, do_strony, silnik, gemini_key):
                         elem["tekst"] = translated_parts[elem_idx]
                         elem_idx += 1
 
-                strony_przetlumaczone += 1
-                stan["postep"] = int(strony_przetlumaczone / stron_do_tlumaczenia * 100)
-                dodaj_log(f"  Strona {strona['numer']} ✓ (1 zapytanie)")
+            strony_przetlumaczone += len(strony)
+            stan["postep"] = int(strony_przetlumaczone / stron_do_tlumaczenia * 100)
+            stan["aktualna_strona"] = strony[-1]["numer"]
+            dodaj_log(f"  ✓ {len(strony)} stron przetłumaczonych (1 zapytanie API)")
 
             if not stan["aktywne"]:
                 break

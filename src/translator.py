@@ -111,17 +111,18 @@ class PDFTranslator:
             return self._handle_error(e, page_text)
 
     def _translate_page_gemini(self, text: str) -> str:
-        """Tłumaczy stronę przez Gemini – jeden request."""
+        """Tłumaczy tekst (może być wiele stron) przez Gemini – jeden request."""
         prompt = (
             "Przetłumacz poniższy tekst z angielskiego na polski.\n"
             "ZASADY:\n"
             "- Zachowaj podział na akapity (puste linie między akapitami)\n"
+            "- Zachowaj separatory ===STRONA=== dokładnie tam gdzie są\n"
             "- NIE tłumacz wzorów matematycznych, numerów równań (np. (6.1)), "
-            "symboli (D², N, σ, √N)\n"
-            "- NIE tłumacz numerów rozdziałów (np. '6-2', '7-1')\n"
-            "- Zachowaj odwołania do rysunków (Fig. → Rys.)\n"
+            "symboli (D², N, σ, √N, P(A)=NA/N)\n"
+            "- NIE tłumacz numerów rozdziałów/podrozdziałów (np. '6-2', '7-1')\n"
+            "- Zamień 'Fig.' na 'Rys.' w odniesieniach do rysunków\n"
             "- Zwróć TYLKO przetłumaczony tekst, bez komentarzy\n\n"
-            f"TEKST DO TŁUMACZENIA:\n\n{text}"
+            f"TEKST:\n\n{text}"
         )
 
         # Retry logic: max 3 próby z oczekiwaniem
