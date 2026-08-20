@@ -16,12 +16,47 @@ from config import FALLBACK_FONT, USE_CUSTOM_FONT, CUSTOM_FONT_PATH
 logger = logging.getLogger(__name__)
 
 # Font file paths (Noto Sans supports Polish diacritics: ą, ć, ę, ł, ń, ó, ś, ź, ż)
-FONT_DIR = "/usr/share/fonts/google-noto"
+# Auto-detect font directory (works on Docker, Linux, and custom installs)
+FONT_SEARCH_PATHS = [
+    "/usr/share/fonts/google-noto",          # Sandbox / some Linux
+    "/usr/share/fonts/truetype/noto",        # Debian/Ubuntu (apt install fonts-noto)
+    "/usr/share/fonts/noto",                 # Fedora/RHEL
+    "/usr/share/fonts/truetype/dejavu",      # Fallback: DejaVu
+    os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "fonts"),  # Local fonts/ dir
+]
+
+
+def _find_font_dir() -> str:
+    """Find the first available font directory."""
+    for path in FONT_SEARCH_PATHS:
+        if os.path.isdir(path):
+            return path
+    return FONT_SEARCH_PATHS[0]  # Fallback
+
+
+def _find_font_file(font_dir: str, variants: list) -> str:
+    """Find a font file trying multiple name variants."""
+    for variant in variants:
+        path = os.path.join(font_dir, variant)
+        if os.path.exists(path):
+            return path
+    return os.path.join(font_dir, variants[0])
+
+
+FONT_DIR = _find_font_dir()
 FONT_FILES = {
-    "regular": os.path.join(FONT_DIR, "NotoSans-Regular.ttf"),
-    "bold": os.path.join(FONT_DIR, "NotoSans-Bold.ttf"),
-    "italic": os.path.join(FONT_DIR, "NotoSans-Italic.ttf"),
-    "bold_italic": os.path.join(FONT_DIR, "NotoSans-BoldItalic.ttf"),
+    "regular": _find_font_file(FONT_DIR, [
+        "NotoSans-Regular.ttf", "NotoSans[wdth,wght].ttf", "DejaVuSans.ttf"
+    ]),
+    "bold": _find_font_file(FONT_DIR, [
+        "NotoSans-Bold.ttf", "NotoSans[wdth,wght].ttf", "DejaVuSans-Bold.ttf"
+    ]),
+    "italic": _find_font_file(FONT_DIR, [
+        "NotoSans-Italic.ttf", "NotoSans-Italic[wdth,wght].ttf", "DejaVuSans-Oblique.ttf"
+    ]),
+    "bold_italic": _find_font_file(FONT_DIR, [
+        "NotoSans-BoldItalic.ttf", "NotoSans-Italic[wdth,wght].ttf", "DejaVuSans-BoldOblique.ttf"
+    ]),
 }
 
 # Font names registered in each page (to avoid re-registering)

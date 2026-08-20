@@ -15,11 +15,23 @@ Aplikacja do tłumaczenia dokumentów PDF z języka angielskiego na polski z **z
 
 ## 🚀 Instalacja
 
-### Wymagania
+### Opcja 1: Docker (zalecana – nie wymaga Pythona!)
+
+Potrzebujesz tylko **Docker Desktop** – reszta jest w kontenerze.
+
+1. Zainstaluj Docker Desktop: https://www.docker.com/products/docker-desktop/
+2. Sklonuj repozytorium:
+   ```bash
+   git clone https://github.com/kowalns88/translator-pdf.git
+   cd translator-pdf
+   ```
+3. Gotowe! Uruchamiaj jak poniżej.
+
+### Opcja 2: Python (dla zaawansowanych)
+
+Wymagania:
 - Python 3.10+
 - Dostęp do internetu (do tłumaczeń Google Translate)
-
-### Krok po kroku
 
 ```bash
 # 1. Klonowanie repozytorium
@@ -37,7 +49,35 @@ pip install -r requirements.txt
 
 ## 📋 Użycie
 
-### Podstawowe użycie
+### 🐳 Z Dockerem (bez Pythona!)
+
+**Windows** (podwójne kliknięcie lub cmd):
+```cmd
+run.bat The_Feynman_Lectures_on_Physics_Volume_1.pdf 1-10
+```
+
+**Linux / Mac** (terminal):
+```bash
+chmod +x run.sh
+./run.sh The_Feynman_Lectures_on_Physics_Volume_1.pdf 1-10
+```
+
+**Bezpośrednio Docker:**
+```bash
+# Budowanie obrazu (tylko raz)
+docker build -t pdf-translator .
+
+# Tłumaczenie (PDF musi być w bieżącym katalogu)
+docker run --rm -v "$(pwd)":/data pdf-translator --input /data/The_Feynman_Lectures_on_Physics_Volume_1.pdf --pages 1-10
+
+# Windows (PowerShell):
+docker run --rm -v "${PWD}:/data" pdf-translator --input /data/The_Feynman_Lectures_on_Physics_Volume_1.pdf --pages 1-10
+
+# Windows (CMD):
+docker run --rm -v "%cd%":/data pdf-translator --input /data/The_Feynman_Lectures_on_Physics_Volume_1.pdf --pages 1-10
+```
+
+### 🐍 Z Pythonem
 
 ```bash
 # Tłumaczenie całego PDF-a
